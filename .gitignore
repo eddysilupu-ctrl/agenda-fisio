@@ -1,0 +1,4 @@
+# Nunca subir datos de pacientes
+respaldo-agenda-fisio-*.json
+*.json
+!manifest.webmanifest
