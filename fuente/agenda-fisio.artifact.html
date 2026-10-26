@@ -156,8 +156,8 @@ main .wrap{padding-block:18px 120px;display:flex;flex-direction:column;gap:22px}
 .legend i.a{border-top:1.5px dashed var(--muted)}
 
 .dl{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:4px 14px}
-.dl div{padding:10px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
-.dl div:first-child{border-top:0}
+.dl > div{padding:10px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
+.dl > div:first-child{border-top:0}
 .dl dt{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .dl dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 
@@ -204,7 +204,19 @@ main .wrap{padding-block:18px 120px;display:flex;flex-direction:column;gap:22px}
 .loading{padding:40px 0;text-align:center;color:var(--muted)}
 @media (max-width:380px){.stats,.summary{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
 
+/* Anamnesis */
+.flag{background:var(--bad-soft);color:var(--bad);border-radius:12px;padding:12px 14px;font-size:14px;display:flex;flex-direction:column;gap:4px}
+.flag ul{margin:2px 0;padding-left:18px}
+.flag span{font-size:13px;font-weight:600}
+.redgrp .group-h{color:var(--bad)}
+.redgrp .txpick input:checked + span{background:var(--bad);border-color:var(--bad);color:#fff}
+.otro{width:100%;padding:8px 12px;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2);margin-top:2px}
+.dl dd .chips{margin-top:2px}
+.summary.wrapb .stat b{white-space:normal;overflow:visible}
+
 /* Ficha imprimible: siempre en papel blanco, colores fijos */
+#printArea .pr-sub-h{font-size:8.5pt;text-transform:uppercase;letter-spacing:.07em;color:#333;margin:10px 0 5px;font-family:var(--f-body);font-weight:700;break-after:avoid}
+#printArea .pr-flag{border:1px solid #b0352d;color:#b0352d;border-radius:4px;padding:6px 8px;font-size:9.5pt;margin:6px 0}
 #printArea{display:none;color:#1b1f1e;background:#fff;font-family:var(--f-body);font-size:10.5pt;line-height:1.4;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 #printArea .pr-h{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #0d6a61;padding-bottom:8px;margin-bottom:14px}
 #printArea .pr-prof{font-family:var(--f-display);font-size:14pt;font-weight:700;color:#0d6a61}
@@ -457,11 +469,11 @@ function formPdf(pid){
   const p = pacById(pid);
   const ck = (n,l,d,on) => `<label class="check"><input type="checkbox" name="${n}" ${on?"checked":""}><span class="body"><b>${l}</b><div class="hint">${d}</div></span></label>`;
   const body = `<p class="hint" style="margin:0">${h(p.nombre)}</p>
-    <div class="checks">${ck("ev","Evaluación inicial","Entrevista, examen, diagnóstico y objetivos",true)}${ck("se","Sesiones","Tabla con dolor, tratamientos y evolución",true)}${ck("pa","Pagos","Pagos recibidos y saldo",false)}</div>
+    <div class="checks">${ck("an","Anamnesis","Postoperatorio o post lesión, banderas rojas y funcionalidad",!!p.anam)}${ck("ev","Evaluación inicial","Entrevista, examen, diagnóstico y objetivos",true)}${ck("se","Sesiones","Tabla con dolor, tratamientos y evolución",true)}${ck("pa","Pagos","Pagos recibidos y saldo",false)}</div>
     ${Object.values(S.perfil||{}).some(Boolean)?"":`<p class="hint" style="margin:0">Consejo: agrega tu nombre y colegiatura en Ajustes para que salgan en la ficha.</p>`}
     <p class="hint" style="margin:0">Se abrirá la ventana de impresión: elige <b>Guardar como PDF</b> como destino.</p>`;
   openSheet("Exportar ficha en PDF", body, {submitLabel:"Generar PDF", onSubmit: f=>{
-    imprimirFicha(pid, {ev:f.elements.ev.checked, se:f.elements.se.checked, pa:f.elements.pa.checked});
+    imprimirFicha(pid, {an:f.elements.an.checked, ev:f.elements.ev.checked, se:f.elements.se.checked, pa:f.elements.pa.checked});
   }});
 }
 function fichaHTML(pid, o){
@@ -473,6 +485,7 @@ function fichaHTML(pid, o){
     <div class="pr-doc"><b>Ficha de fisioterapia</b><span>Emitida el ${fl(today())}</span></div></header>
     <h1 class="pr-name">${h(p.nombre)}</h1>
     <dl class="pr-kv">${kv("DNI",p.dni)}${kv("Edad",ed!=null?ed+" años":"")}${kv("Fecha de nacimiento",fl(p.nac))}${kv("Teléfono",p.tel)}${kv("Ocupación",p.ocupacion)}${kv("Estado",p.estado==="alta"?"De alta":"En tratamiento")}${kv("Diagnóstico médico",p.dxMedico)}${kv("Médico que deriva",p.medico)}</dl>`;
+  if(o.an) x += anamPrint(p);
   if(o.ev){
     x += `<section class="pr-sec"><h2>Evaluación inicial</h2>`;
     x += p.eval ? `<dl class="pr-kv">${kv("Fecha",fl(e.fecha))}${kv("Dolor inicial (EVA)",e.eva!=null&&e.eva!==""?e.eva+" / 10":"")}${kv("Inicio y mecanismo",e.inicio)}
@@ -522,6 +535,7 @@ async function cargarEjemplo(){
   const p1 = {nombre:"Rosa Medina (ejemplo)", dni:"40123456", tel:"987 654 321", nac:"1978-05-12", ocupacion:"Docente", dxMedico:"Lumbalgia mecánica", medico:"Dr. Paredes", tarifa:80, estado:"activo", ejemplo:true,
     eval:{fecha:addDays(t,-24), motivo:"Dolor lumbar de 3 semanas que empeora al estar sentada mucho tiempo.", inicio:"Progresivo, tras mudanza.", antecedentes:"Episodio similar hace 2 años. Sin cirugías.", medicacion:"Naproxeno ocasional", eva:7, localizacion:"Zona lumbar baja, irradia a glúteo derecho", examen:"Flexión lumbar limitada al 60%. Lasègue negativo. Contractura paravertebral derecha. Debilidad de core.", dxFt:"Disfunción lumbar mecánica con contractura paravertebral y déficit de control motor.", objetivos:"Reducir dolor a EVA ≤ 3, recuperar flexión completa, volver a jornada laboral sin dolor.", sesionesPlan:10, frecuencia:"2 veces por semana"}};
   const p2 = {nombre:"Jorge Salas (ejemplo)", dni:"72345678", tel:"912 345 678", nac:"1995-09-03", ocupacion:"Futbolista amateur", dxMedico:"Esguince de tobillo grado II", medico:"", tarifa:80, estado:"activo", ejemplo:true,
+    anam:{tipo:"Post lesión (sin cirugía)", fechaEvento:addDays(t,-14), region:["Tobillo / pie"], lado:"Derecho", mecanismo:["Torsión / giro","Deporte"], mecanismoDesc:"Pisó a un rival al caer de un salto; el pie se fue hacia adentro. Sintió un chasquido.", carga:"Según tolerancia", ortesis:["Bota walker"], ortesisHasta:"2 semanas", marcha:["Una muleta"], evaReposo:3, evaMov:6, tipoDolor:["Punzante"], patron:["Al apoyar"], agravantes:"Bajar escaleras, terreno irregular", atenuantes:"Hielo y elevación", sintomas:["Edema","Equimosis / hematoma","Inestabilidad / fallo","Cojera"], banderas:[], comorb:[], alergias:"Ninguna", lesionesPrevias:"Esguince leve del mismo tobillo hace 2 años", independencia:"Independiente", limitaciones:["Subir / bajar escaleras","Hacer deporte"], laboral:"Trabajando", actividadPrevia:"Fútbol 3 veces por semana", metaPaciente:"Volver a jugar fútbol sin miedo a que se le doble el tobillo", metaFecha:"Torneo de enero"},
     eval:{fecha:addDays(t,-12), motivo:"Esguince de tobillo derecho jugando fútbol.", inicio:"Traumático, inversión forzada.", antecedentes:"Ninguno relevante.", medicacion:"", eva:6, localizacion:"Maléolo externo derecho", examen:"Edema leve. Cajón anterior positivo leve. Dorsiflexión reducida.", dxFt:"Esguince lateral grado II en fase subaguda.", objetivos:"Recuperar rango, fuerza y propiocepción para volver a jugar.", sesionesPlan:5, frecuencia:"2–3 veces por semana"}};
   const id1 = await save("pac", p1), id2 = await save("pac", p2);
   const sesiones = [
@@ -748,6 +762,7 @@ function vFicha(p){
     <div class="hero-top"><button class="icon-btn" data-act="back" aria-label="Volver"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div style="flex:1;min-width:0"><h2>${h(p.nombre)}</h2>
       <div class="meta">${[ed!=null?ed+" años":"", p.dxMedico, p.estado==="alta"?"De alta":""].filter(Boolean).map(h).join(" · ")}</div>
+      ${p.anam?.banderas?.length?`<button class="pill bad" data-tab="anamnesis" style="cursor:pointer;margin-top:4px">⚠ ${p.anam.banderas.length===1?"1 bandera roja":p.anam.banderas.length+" banderas rojas"}</button>`:""}
       ${p.tel?`<div class="meta tel"><span class="num">${h(p.tel)}</span><button class="btn ghost small" data-act="copy" data-text="${h(p.tel)}">Copiar</button></div>`:""}</div></div>
     <div class="summary">
       <div class="stat"><span class="eyebrow">Sesiones</span><b class="num">${c.realizadas.length} <span class="muted" style="font-size:13px;font-family:var(--f-body)">${plan}</span></b></div>
@@ -756,12 +771,14 @@ function vFicha(p){
     </div>
     <div class="row"><button class="btn primary" data-act="new-ses" data-pid="${p.id}">+ Sesión</button><button class="btn" data-act="new-pag" data-pid="${p.id}">+ Pago</button><button class="btn" data-act="ver-cal" data-pid="${p.id}">Ver en calendario</button>${S.mode==="local"?`<button class="btn" data-act="pdf" data-pid="${p.id}">Exportar PDF</button>`:""}<button class="btn" data-act="informe" data-pid="${p.id}">Copiar informe</button></div>
   </section>
-  <div class="tabs" role="tablist">${[["sesiones","Sesiones"],["evaluacion","Evaluación"],["pagos","Pagos"],["datos","Datos"]].map(([k,l])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${l}</button>`).join("")}</div>`;
+  <div class="tabs" role="tablist">${[["sesiones","Sesiones"],["anamnesis","Anamnesis"],["evaluacion","Evaluación"],["pagos","Pagos"],["datos","Datos"]].map(([k,l])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${l}</button>`).join("")}</div>`;
 
   if(S.tab==="sesiones"){
     html += chartEva(c);
     const list = [...c.todas].sort(cmpSes).reverse();
     html += list.length ? `<div class="sec">${list.map(s=>sesCard(s,c)).join("")}</div>` : `<div class="empty"><p>Aún no hay sesiones. Programa la primera.</p><button class="btn primary" data-act="new-ses" data-pid="${p.id}">Programar sesión</button></div>`;
+  } else if(S.tab==="anamnesis"){
+    html += vAnamnesis(p);
   } else if(S.tab==="evaluacion"){
     if(!e) html += `<div class="empty"><h2>Sin evaluación inicial</h2><p>Registra la entrevista: motivo de consulta, examen físico, diagnóstico fisioterapéutico y plan de tratamiento.</p><button class="btn primary" data-act="edit-eval" data-pid="${p.id}">Registrar evaluación</button></div>`;
     else {
@@ -784,6 +801,161 @@ function vFicha(p){
       <button class="btn danger" data-act="del-pac" data-id="${p.id}">Borrar paciente</button></div>`;
   }
   return html;
+}
+
+/* ---------- anamnesis postoperatorio / post lesión ---------- */
+// t: radio (una opción), multi (varias casillas), text, area, date, eva (0-10). otro: agrega un campo libre "Otro".
+const POSTOP = "Postoperatorio";
+const ANAM = [
+  {g:"Caso", f:[
+    {k:"tipo", t:"radio", l:"Tipo de caso", o:[POSTOP,"Post lesión (sin cirugía)"]},
+    {k:"fechaEvento", t:"date", l:"Fecha de la cirugía o lesión"},
+    {k:"region", t:"multi", l:"Región afectada", o:["Hombro","Codo","Muñeca / mano","Columna cervical","Columna dorsal","Columna lumbar","Cadera","Rodilla","Tobillo / pie"], otro:true},
+    {k:"lado", t:"radio", l:"Lado", o:["Derecho","Izquierdo","Bilateral"]},
+  ]},
+  {g:"Cirugía", postop:true, f:[
+    {k:"procedimiento", t:"text", l:"Procedimiento realizado", ph:"Ej. Reconstrucción de LCA con injerto de isquiotibiales"},
+    {k:"cirujano", t:"text", l:"Cirujano / clínica"},
+    {k:"implante", t:"multi", l:"Técnica o material", o:["Artroscopia","Cirugía abierta","Placa y tornillos","Clavo endomedular","Prótesis","Injerto / plastia","Sutura / reparación","Fijador externo"], otro:true},
+    {k:"complicaciones", t:"area", l:"Complicaciones durante o después de la cirugía"},
+  ]},
+  {g:"Mecanismo de lesión", f:[
+    {k:"mecanismo", t:"multi", l:"¿Cómo se lesionó?", o:["Caída","Golpe directo","Torsión / giro","Sobreuso","Accidente de tránsito","Deporte","Accidente laboral"], otro:true},
+    {k:"mecanismoDesc", t:"area", l:"Relato del paciente", ph:"Qué pasó, en qué posición, si escuchó un chasquido…"},
+  ]},
+  {g:"Indicaciones médicas", f:[
+    {k:"carga", t:"radio", l:"Carga permitida", o:["Sin carga","Carga parcial","Según tolerancia","Carga total","No aplica"]},
+    {k:"restricciones", t:"text", l:"Restricciones de movimiento", ph:"Ej. Flexión máxima 90° hasta la semana 4"},
+    {k:"ortesis", t:"multi", l:"Inmovilización / ortesis", o:["Férula","Yeso","Rodillera articulada","Cabestrillo","Bota walker","Collarín","Faja lumbar"], otro:true},
+    {k:"ortesisHasta", t:"text", l:"¿Hasta cuándo?", ph:"Ej. 6 semanas o fecha"},
+    {k:"marcha", t:"multi", l:"Ayuda para caminar", o:["Dos muletas","Una muleta","Andador","Bastón","Silla de ruedas"]},
+    {k:"controlMedico", t:"date", l:"Próximo control médico"},
+  ]},
+  {g:"Dolor", f:[
+    {k:"evaReposo", t:"eva", l:"Dolor en reposo (EVA)"},
+    {k:"evaMov", t:"eva", l:"Dolor al movimiento (EVA)"},
+    {k:"tipoDolor", t:"multi", l:"Tipo de dolor", o:["Punzante","Quemante","Pulsátil","Sordo / opresivo","Eléctrico","Hormigueo"]},
+    {k:"patron", t:"multi", l:"¿Cuándo duele más?", o:["Mañana","Tarde","Noche","Constante","Solo al moverse","Al apoyar"]},
+    {k:"agravantes", t:"text", l:"Qué lo empeora"},
+    {k:"atenuantes", t:"text", l:"Qué lo alivia"},
+  ]},
+  {g:"Signos y síntomas actuales", f:[
+    {k:"sintomas", t:"multi", l:"Marca lo que presenta", o:["Edema","Equimosis / hematoma","Rigidez","Debilidad muscular","Inestabilidad / fallo","Bloqueo articular","Crepitación","Parestesias / adormecimiento","Calor local","Contractura muscular","Atrofia","Cojera"], otro:true},
+  ]},
+  {g:"Herida quirúrgica", postop:true, f:[
+    {k:"herida", t:"radio", l:"Estado de la herida", o:["Cicatrizada","En cicatrización","Con puntos o grapas","Con secreción","Abierta / dehiscencia"]},
+    {k:"retiroPuntos", t:"date", l:"Retiro de puntos"},
+    {k:"cicatriz", t:"multi", l:"Cicatriz", o:["Normal","Adherida","Hipertrófica","Sensible al tacto","Enrojecida"]},
+  ]},
+  {g:"Banderas rojas", red:true, f:[
+    {k:"banderas", t:"multi", l:"Si marca alguna, contactar o derivar al médico", o:["Fiebre o escalofríos","Herida con pus o mal olor","Pantorrilla dolorosa, caliente o hinchada (posible TVP)","Falta de aire o dolor de pecho","Pérdida progresiva de fuerza o sensibilidad","Alteración para orinar o defecar","Dolor que no cede con reposo ni medicación","Dolor nocturno intenso o baja de peso sin causa"]},
+  ]},
+  {g:"Antecedentes", f:[
+    {k:"comorb", t:"multi", l:"Enfermedades y hábitos", o:["Hipertensión","Diabetes","Obesidad","Osteoporosis","Enfermedad cardiaca","Enfermedad respiratoria","Artrosis / artritis","Tabaquismo","Toma anticoagulantes","Embarazo"], otro:true},
+    {k:"medicacionAct", t:"text", l:"Medicación actual"},
+    {k:"alergias", t:"text", l:"Alergias"},
+    {k:"cirugiasPrevias", t:"text", l:"Cirugías previas"},
+    {k:"lesionesPrevias", t:"text", l:"Lesiones previas en la misma zona"},
+  ]},
+  {g:"Funcionalidad y contexto", f:[
+    {k:"independencia", t:"radio", l:"Nivel de independencia", o:["Independiente","Necesita ayuda parcial","Dependiente"]},
+    {k:"limitaciones", t:"multi", l:"Actividades que hoy le cuestan", o:["Caminar","Subir / bajar escaleras","Sentarse / levantarse","Vestirse","Asearse","Dormir","Trabajar","Conducir","Hacer deporte","Cargar objetos"], otro:true},
+    {k:"laboral", t:"radio", l:"Situación laboral", o:["Trabajando","Descanso médico","Trabajo adaptado","No trabaja"]},
+    {k:"actividadPrevia", t:"text", l:"Actividad física o deporte previo", ph:"Ej. Fútbol 3 veces por semana"},
+    {k:"apoyo", t:"text", l:"Apoyo en casa", ph:"Con quién vive, escaleras en casa…"},
+  ]},
+  {g:"Expectativas", f:[
+    {k:"metaPaciente", t:"area", l:"¿Qué quiere lograr el paciente?", ph:"Ej. Volver a jugar fútbol, subir escaleras sin dolor"},
+    {k:"metaFecha", t:"text", l:"¿Para cuándo?", ph:"Ej. Torneo en marzo"},
+  ]},
+  {g:"Observaciones", f:[ {k:"obs", t:"area", l:"Notas adicionales"} ]},
+];
+const esPostop = a => a && a.tipo===POSTOP;
+const vacio = v => v==null || v==="" || (Array.isArray(v) && !v.length);
+function tiempoEvento(a){
+  if(!a?.fechaEvento) return "";
+  const d = Math.round((toDate(today()) - toDate(a.fechaEvento))/864e5);
+  if(d<0) return `Faltan ${-d} días para la cirugía`;
+  const sem = Math.floor(d/7)+1;
+  return `Día ${d} · semana ${sem} ${esPostop(a)?"postoperatoria":"post lesión"}`;
+}
+function anamValor(fd, a){
+  let v = a[fd.k];
+  if(fd.t==="multi"){ v = [...(v||[])]; if(a[fd.k+"_otro"]) v.push(a[fd.k+"_otro"]); return v.length ? v : null; }
+  if(fd.t==="eva") return v==null||v==="" ? null : v;
+  if(fd.t==="date") return v ? fFecha(v,{day:"numeric",month:"long",year:"numeric"}) : null;
+  return vacio(v) ? null : v;
+}
+function vAnamnesis(p){
+  const a = p.anam;
+  if(!a) return `<div class="empty"><h2>Sin anamnesis</h2><p>Registra el caso postoperatorio o post lesión: cirugía, indicaciones médicas, dolor, síntomas, banderas rojas y funcionalidad. La mayoría se responde marcando casillas.</p><button class="btn primary" data-act="edit-anam" data-pid="${p.id}">Llenar anamnesis</button></div>`;
+  let html = "";
+  if(a.banderas?.length) html += `<div class="flag"><b>⚠ Banderas rojas</b><ul>${a.banderas.map(b=>`<li>${h(b)}</li>`).join("")}</ul><span>Evalúa contactar o derivar al médico antes de continuar el tratamiento.</span></div>`;
+  const reg = [...(a.region||[]), a.region_otro].filter(Boolean).join(", ");
+  html += `<div class="summary wrapb">
+    <div class="stat"><span class="eyebrow">Caso</span><b style="font-size:15px">${h(esPostop(a)?"Postoperatorio":a.tipo?"Post lesión":"—")}</b></div>
+    <div class="stat"><span class="eyebrow">Zona</span><b style="font-size:15px">${h(reg||"—")}${a.lado?` <span class="muted" style="font-weight:500">${h(a.lado.toLowerCase())}</span>`:""}</b></div>
+    <div class="stat"><span class="eyebrow">Carga</span><b style="font-size:15px">${h(a.carga||"—")}</b></div></div>`;
+  const te = tiempoEvento(a); if(te) html += `<p class="muted" style="margin:0;font-weight:600">${h(te)}</p>`;
+  for(const grp of ANAM){
+    if(grp.red) continue;
+    if(grp.postop && !esPostop(a)) continue;
+    const filas = grp.f.map(fd=>{ const v=anamValor(fd,a); if(v==null || ["tipo","region","lado"].includes(fd.k)) return "";
+      const dd = fd.t==="multi" ? `<div class="chips">${v.map(x=>`<span class="chip">${h(x)}</span>`).join("")}</div>` : fd.t==="eva" ? `<span class="eva">${evaDot(v)}<span class="muted">de 10</span></span>` : h(v);
+      return `<div><dt>${h(fd.l)}</dt><dd>${dd}</dd></div>`; }).join("");
+    if(filas) html += `<section class="sec"><span class="eyebrow">${h(grp.g)}</span><dl class="dl">${filas}</dl></section>`;
+  }
+  html += `<div class="row"><button class="btn" data-act="edit-anam" data-pid="${p.id}">Editar anamnesis</button></div>`;
+  return html;
+}
+function formAnam(pid){
+  const p = pacById(pid), a = p.anam || {tipo:POSTOP};
+  const chips = (fd, multi) => `<div class="txpick">${fd.o.map(o=>`<label><input type="${multi?"checkbox":"radio"}" name="an_${fd.k}" value="${h(o)}" ${(multi?(a[fd.k]||[]).includes(o):a[fd.k]===o)?"checked":""}><span>${h(o)}</span></label>`).join("")}</div>`;
+  const campo = fd => {
+    const id = "an_"+fd.k, ph = fd.ph?` placeholder="${h(fd.ph)}"`:"";
+    let inner;
+    if(fd.t==="radio") inner = chips(fd,false);
+    else if(fd.t==="multi") inner = chips(fd,true) + (fd.otro?`<input id="${id}_otro" name="${id}_otro" value="${h(a[fd.k+"_otro"])}" placeholder="Otro (escribir)" class="otro">`:"");
+    else if(fd.t==="eva") inner = evaPicker(id, a[fd.k]);
+    else if(fd.t==="area") return field(h(fd.l), `<textarea id="${id}" name="${id}"${ph}>${h(a[fd.k])}</textarea>`);
+    else return field(h(fd.l), `<input id="${id}" name="${id}" type="${fd.t==="date"?"date":"text"}" value="${h(a[fd.k])}"${ph}>`);
+    return `<div class="f"><span>${h(fd.l)}</span>${inner}</div>`;
+  };
+  const body = `<p class="hint" style="margin:0">${h(p.nombre)} · Toca las casillas que correspondan y completa lo demás. Nada es obligatorio.</p>` +
+    ANAM.map(grp=>`<div class="sec${grp.red?" redgrp":""}" style="gap:14px" ${grp.postop?"data-postop":""}><div class="group-h">${grp.red?"⚠ ":""}${h(grp.g)}</div>${grp.f.map(campo).join("")}</div>`).join("");
+  openSheet("Anamnesis", body, {onSubmit: async f=>{
+    const out = {};
+    for(const grp of ANAM) for(const fd of grp.f){
+      const n = "an_"+fd.k;
+      if(fd.t==="multi"){ out[fd.k] = [...f.querySelectorAll(`input[name="${n}"]:checked`)].map(i=>i.value); if(fd.otro) out[fd.k+"_otro"] = val(f, n+"_otro"); }
+      else if(fd.t==="radio") out[fd.k] = radio(f, n);
+      else if(fd.t==="eva"){ const r = radio(f, n); out[fd.k] = r===""?null:Number(r); }
+      else out[fd.k] = val(f, n);
+    }
+    out.actualizada = today();
+    await save("pac", {...p, anam:out}); S.tab="anamnesis";
+    toast(out.banderas.length ? "Anamnesis guardada · revisa las banderas rojas" : "Anamnesis guardada"); render();
+  }, onMount: f=>{
+    const sync = () => { const post = radio(f,"an_tipo")===POSTOP; f.querySelectorAll("[data-postop]").forEach(el=>el.hidden=!post); paintEva(f); };
+    f.addEventListener("change", sync); sync();
+  }});
+}
+function anamPrint(p){
+  const a = p.anam;
+  let x = `<section class="pr-sec"><h2>Anamnesis</h2>`;
+  if(!a) return x + `<p class="pr-note">Sin anamnesis registrada.</p></section>`;
+  const te = tiempoEvento(a);
+  if(te) x += `<p class="pr-note"><b>${h(te)}</b></p>`;
+  if(a.banderas?.length) x += `<div class="pr-flag"><b>Banderas rojas:</b> ${a.banderas.map(h).join(" · ")}</div>`;
+  for(const grp of ANAM){
+    if(grp.red || (grp.postop && !esPostop(a))) continue;
+    const filas = grp.f.map(fd=>{ const v=anamValor(fd,a); if(v==null) return "";
+      const txt = fd.t==="multi" ? v.join(", ") : fd.t==="eva" ? v+" / 10" : String(v);
+      const full = fd.t==="area" || (fd.t==="multi" && txt.length>40) || txt.length>60;
+      return `<div class="${full?"full":""}"><dt>${h(fd.l)}</dt><dd>${h(txt)}</dd></div>`; }).join("");
+    if(filas) x += `<h3 class="pr-sub-h">${h(grp.g)}</h3><dl class="pr-kv">${filas}</dl>`;
+  }
+  return x + `</section>`;
 }
 
 /* ---------- informe ---------- */
@@ -847,7 +1019,7 @@ function formPaciente(p){
     const nombre=val(f,"nombre"); if(!nombre){ toast("Escribe el nombre del paciente"); f.elements.nombre.focus(); return false; }
     const obj={...p, nombre, dni:val(f,"dni"), tel:val(f,"tel"), nac:val(f,"nac"), ocupacion:val(f,"ocupacion"), dxMedico:val(f,"dxMedico"), medico:val(f,"medico"), tarifa:val(f,"tarifa")===""?"":Number(val(f,"tarifa")), estado:val(f,"estado")};
     const id = await save("pac", obj);
-    if(!p.id){ S.pid=id; S.tab="evaluacion"; toast("Paciente creado. Registra su evaluación."); } else toast("Datos guardados");
+    if(!p.id){ S.pid=id; S.tab="anamnesis"; toast("Paciente creado. Llena su anamnesis."); } else toast("Datos guardados");
     render();
   }, onMount:f=>{ if(!p.id) setTimeout(()=>f.elements.nombre.focus(),50); }});
 }
@@ -985,6 +1157,7 @@ document.addEventListener("click", async ev=>{
     case "new-pac": formPaciente(); break;
     case "edit-pac": formPaciente(pacById(id)); break;
     case "edit-eval": formEval(pid); break;
+    case "edit-anam": formAnam(pid); break;
     case "new-ses": if(!S.pac.length){ toast("Primero crea un paciente"); formPaciente(); break; } { const enAgenda = S.view==="agenda" && !S.pid; formSesion(null, pid || S.pid || (enAgenda ? S.filtro : ""), {fecha: b.dataset.fecha || (enAgenda ? S.dia : "")}); } break;
     case "mes": { const [y,m]=S.mes.split("-").map(Number); const d=new Date(y,m-1+Number(b.dataset.d),1); S.mes=ymd(d).slice(0,7); S.dia = today().startsWith(S.mes) ? today() : S.mes+"-01"; render(); break; }
     case "hoy": S.dia=today(); S.mes=S.dia.slice(0,7); render(); break;

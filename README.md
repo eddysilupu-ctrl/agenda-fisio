@@ -25,3 +25,11 @@ En **Ajustes → Descargar respaldo**. Hazlo cada semana y antes de cambiar de d
 | `sw.js` | Permite usarla sin internet |
 | `manifest.webmanifest` + íconos | Permiten instalarla como app |
 | `fuente/agenda-fisio.artifact.html` | Misma app, en la versión que corre dentro de Claude |
+
+## Cómo se actualiza
+
+La app se edita en `fuente/agenda-fisio.artifact.html` y se genera `index.html` con:
+
+```
+python3 fuente/build.py
+```
