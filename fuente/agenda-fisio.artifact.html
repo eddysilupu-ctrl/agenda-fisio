@@ -149,6 +149,17 @@ main .wrap{padding-block:18px 120px;display:flex;flex-direction:column;gap:22px}
 .chart .l-a{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 3}
 .chart .l-d{fill:none;stroke:var(--accent);stroke-width:2.5}
 .chart .area{fill:var(--accent-soft);opacity:.7}
+.chart .sep{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 3}
+.chart .rl{font-weight:600}
+/* Rondas */
+.ronda{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.ronda .big{font-family:var(--f-display);font-size:20px;font-weight:700}
+.ronda p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.bar{height:8px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+.ronda.done{border-color:var(--accent)}
+.ronda-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:none;border:0;border-bottom:1px solid var(--line);padding:6px 2px;text-align:left;cursor:pointer;width:100%}
+.ronda-h .muted{font-size:13px}
 .chart .p-a{fill:var(--surface);stroke:var(--muted);stroke-width:1.5}
 .chart .p-d{fill:var(--accent)}
 .legend{display:flex;gap:14px;font-size:12.5px;color:var(--muted);margin-top:6px}
@@ -354,9 +365,42 @@ function cuenta(pid){
   const cubiertoReal = realizadas.reduce((t,s)=>t+Math.min(cov.get(s.id).amt,precioDe(s)),0);
   const aFavor = Math.max(pagado - cubiertoReal, 0);
   const pendientes = realizadas.filter(s=>est.get(s.id)!=="pagada");
+  // Rondas: numeración de sesiones dentro de cada ronda (R2·S3) y resumen por ronda.
+  const rs = rondasDe(pacById(pid)); const nsR = new Set(rs.map(r=>r.n));
+  for(const s of todas){ const n=rondaN(s); if(!nsR.has(n)){ rs.push(rondaVacia(n)); nsR.add(n); } }
+  rs.sort((a,b)=>a.n-b.n);
+  const multi = rs.length>1, numR = new Map(), lab = new Map(), cnt = {};
+  ses.forEach(s=>{ const n=rondaN(s); cnt[n]=(cnt[n]||0)+1; numR.set(s.id,cnt[n]); lab.set(s.id,(multi?`R${n}·`:"")+"S"+cnt[n]); });
+  const rondas = rs.map(r=>{ const sr=todas.filter(s=>rondaN(s)===r.n);
+    return {...r, todas:sr, realizadas:sr.filter(s=>s.estado==="realizada"), programadas:sr.filter(s=>s.estado==="programada"), noAsistio:sr.filter(s=>s.estado==="no_asistio")}; });
+  const actual = rondas.filter(r=>!r.cerrada).slice(-1)[0] || rondas[rondas.length-1];
   const r = {todas, ses, num, cov, est, realizadas, programadas, pagos, pagado, debe, aFavor, pendientes,
-    prepagadas: programadas.filter(s=>est.get(s.id)==="pagada").length};
+    prepagadas: programadas.filter(s=>est.get(s.id)==="pagada").length, rondas, actual, multi, numR, lab};
   cache.set(pid, r); return r;
+}
+
+/* ---------- rondas de tratamiento ---------- */
+// Cada paciente puede tener varias rondas (ciclos de N sesiones). Se guardan en p.rondas y cada sesión lleva s.ronda.
+// Datos anteriores, sin p.rondas ni s.ronda, cuentan como la ronda 1: nada se rompe y los respaldos viejos siguen sirviendo.
+const rondaN = s => Number(s?.ronda)||1;
+const rondaVacia = n => ({n, inicio:"", plan:null, objetivo:"", cerrada:"", nota:""});
+function rondasDe(p){
+  if(Array.isArray(p?.rondas) && p.rondas.length) return p.rondas.map(r=>({...rondaVacia(r.n), ...r})).sort((a,b)=>a.n-b.n);
+  return [{...rondaVacia(1), inicio:p?.eval?.fecha||"", plan:p?.eval?.sesionesPlan ?? null}];
+}
+const rondaAbierta = p => rondasDe(p).filter(r=>!r.cerrada).slice(-1)[0] || null;
+const evoDe = arr => { const ev=arr.filter(s=>s.evaAntes!=null||s.evaDespues!=null); if(!ev.length) return ""; return `${ev[0].evaAntes??ev[0].evaDespues} → ${ev[ev.length-1].evaDespues??ev[ev.length-1].evaAntes}`; };
+const rangoRonda = r => { const f=r.todas.filter(s=>s.estado!=="programada").map(s=>s.fecha).sort(); const ini=r.inicio||f[0]||"", fin=r.cerrada||"";
+  const o={day:"numeric",month:"short"}; return ini ? fFecha(ini,o)+(fin?" – "+fFecha(fin,o):" – hoy") : ""; };
+// Guarda las rondas del paciente (la primera vez convierte la ronda 1 implícita en una real).
+async function guardarRondas(p, rondas){ await save("pac", {...p, rondas: rondas.map(r=>({n:r.n, inicio:r.inicio||"", plan:r.plan??null, objetivo:r.objetivo||"", cerrada:r.cerrada||"", nota:r.nota||""}))}); }
+// Abre la ronda siguiente; si había una en curso, la cierra con la fecha indicada.
+async function nuevaRonda(p, datos){
+  const rs = rondasDe(p); const ultima = Math.max(...rs.map(r=>r.n), ...sesOf(p.id).map(rondaN));
+  for(const r of rs) if(!r.cerrada){ r.cerrada = datos.cierre || today(); if(datos.notaCierre) r.nota = datos.notaCierre; }
+  const n = ultima+1;
+  rs.push({...rondaVacia(n), inicio:datos.inicio||today(), plan:datos.plan ?? null, objetivo:datos.objetivo||""});
+  await guardarRondas(p, rs); return n;
 }
 
 function saldoPill(c){
@@ -499,11 +543,12 @@ function fichaHTML(pid, o){
     const na = hist.filter(s=>s.estado==="no_asistio").length;
     const ev = c.realizadas.filter(s=>s.evaAntes!=null||s.evaDespues!=null);
     const evo = ev.length ? `${ev[0].evaAntes??ev[0].evaDespues} → ${ev[ev.length-1].evaDespues??ev[ev.length-1].evaAntes}` : "";
-    x += `<section class="pr-sec"><h2>Sesiones</h2><p class="pr-note"><b>${c.realizadas.length}</b> realizadas${e.sesionesPlan?` de ${e.sesionesPlan} previstas`:""}${na?` · ${na} ${na===1?"inasistencia":"inasistencias"}`:""}${evo?` · Dolor (EVA): <b>${evo}</b>`:""}</p>
+    x += `<section class="pr-sec"><h2>Sesiones</h2><p class="pr-note"><b>${c.realizadas.length}</b> realizadas${!c.multi&&c.actual.plan?` de ${c.actual.plan} previstas`:""}${c.multi?` en ${c.rondas.length} rondas`:""}${na?` · ${na} ${na===1?"inasistencia":"inasistencias"}`:""}${evo?` · Dolor (EVA): <b>${evo}</b>`:""}</p>
+      ${c.multi?`<table class="pr-t"><thead><tr><th>Ronda</th><th>Periodo</th><th>Sesiones</th><th>EVA</th><th>Objetivo y cierre</th></tr></thead><tbody>${c.rondas.map(r=>`<tr><td>${r.n}</td><td style="white-space:nowrap">${rangoRonda(r)}</td><td>${r.realizadas.length}${r.plan?" de "+r.plan:""}</td><td style="white-space:nowrap">${evoDe(r.realizadas)||"–"}</td><td>${h(r.objetivo)}${r.nota?`<div class="pr-casa"><b>Cierre:</b> ${h(r.nota)}</div>`:""}</td></tr>`).join("")}</tbody></table>`:""}
       ${chartEva(c)}`;
     x += hist.length ? `<table class="pr-t"><thead><tr><th>N°</th><th>Fecha</th><th>EVA</th><th>Tratamientos</th><th>Evolución e indicaciones</th></tr></thead><tbody>
       ${hist.map(s=> s.estado==="no_asistio" ? `<tr class="na"><td>—</td><td>${fl(s.fecha)}</td><td colspan="3">No asistió</td></tr>` :
-        `<tr><td>${c.num.get(s.id)}</td><td style="white-space:nowrap">${fl(s.fecha)}</td><td style="white-space:nowrap">${s.evaAntes??"–"} → ${s.evaDespues??"–"}</td><td>${h((s.tratamientos||[]).join(", "))}</td><td>${h(s.nota)}${s.casa?`<div class="pr-casa"><b>Para casa:</b> ${h(s.casa)}</div>`:""}</td></tr>`).join("")}</tbody></table>`
+        `<tr><td style="white-space:nowrap">${c.lab.get(s.id)}</td><td style="white-space:nowrap">${fl(s.fecha)}</td><td style="white-space:nowrap">${s.evaAntes??"–"} → ${s.evaDespues??"–"}</td><td>${h((s.tratamientos||[]).join(", "))}</td><td>${h(s.nota)}${s.casa?`<div class="pr-casa"><b>Para casa:</b> ${h(s.casa)}</div>`:""}</td></tr>`).join("")}</tbody></table>`
       : `<p class="pr-note">Aún no hay sesiones realizadas.</p>`;
     if(c.programadas.length) x += `<p class="pr-note"><b>Próximas citas:</b> ${c.programadas.map(s=>fl(s.fecha)+(s.hora?" "+h(s.hora):"")).join(" · ")}</p>`;
     x += `</section>`;
@@ -512,7 +557,7 @@ function fichaHTML(pid, o){
     const fact = c.realizadas.reduce((a,s)=>a+precioDe(s),0);
     x += `<section class="pr-sec"><h2>Pagos</h2>`;
     x += c.pagos.length ? `<table class="pr-t"><thead><tr><th>Fecha</th><th>Monto</th><th>Método</th><th>Sesiones que cubre</th><th>Nota</th></tr></thead><tbody>
-      ${c.pagos.map(pg=>{ const cubre=c.ses.filter(s=>c.cov.get(s.id).pagos.includes(pg.id)).map(s=>"S"+c.num.get(s.id)); return `<tr><td>${fl(pg.fecha)}</td><td style="white-space:nowrap">${money(pg.monto)}</td><td>${h(pg.metodo)}</td><td>${cubre.join(", ")||"A cuenta"}</td><td>${h(pg.nota)}</td></tr>`; }).join("")}</tbody></table>`
+      ${c.pagos.map(pg=>{ const cubre=c.ses.filter(s=>c.cov.get(s.id).pagos.includes(pg.id)).map(s=>c.lab.get(s.id)); return `<tr><td>${fl(pg.fecha)}</td><td style="white-space:nowrap">${money(pg.monto)}</td><td>${h(pg.metodo)}</td><td>${cubre.join(", ")||"A cuenta"}</td><td>${h(pg.nota)}</td></tr>`; }).join("")}</tbody></table>`
       : `<p class="pr-note">Sin pagos registrados.</p>`;
     x += `<p class="pr-note">Facturado: <b>${money(fact)}</b> · Pagado: <b>${money(c.pagado)}</b> · ${c.debe>0.004?`Pendiente: <b>${money(c.debe)}</b>`:c.aFavor>0.004?`A favor: <b>${money(c.aFavor)}</b>`:"Al día"}</p></section>`;
   }
@@ -589,12 +634,12 @@ function emptyInicio(){
 
 function sesRow(s, opts={}){
   const p = pacById(s.pid); if(!p) return "";
-  const c = cuenta(s.pid); const n = c.num.get(s.id);
-  const plan = p.eval?.sesionesPlan ? ` de ${p.eval.sesionesPlan}` : "";
+  const c = cuenta(s.pid); const n = c.numR.get(s.id);
+  const r = c.rondas.find(x=>x.n===rondaN(s)); const plan = r?.plan ? ` de ${r.plan}` : "";
   return `<button class="item" data-act="edit-ses" data-id="${s.id}">
     <i class="mk mk-${MK[s.estado]||"p"}" aria-hidden="true"></i><span class="time">${h(s.hora||"—")}</span>
     <span class="body"><span class="t">${h(p.nombre)}</span>
-      <span class="s">${n?`Sesión ${n}${plan} · `:""}${h(p.dxMedico || p.eval?.dxFt || "")}</span></span>
+      <span class="s">${c.multi?`Ronda ${rondaN(s)} · `:""}${n?`Sesión ${n}${plan} · `:""}${h(p.dxMedico || p.eval?.dxFt || "")}</span></span>
     ${opts.cerrar ? `<span class="pill warn">Marcar</span>` : pagoPill(s,c)}
   </button>`;
 }
@@ -664,7 +709,7 @@ function vAgenda(){
 
 function pacRow(p){
   const c = cuenta(p.id); const ult = c.realizadas[c.realizadas.length-1];
-  const sub = [`${c.realizadas.length} ${c.realizadas.length===1?"sesión":"sesiones"}`, ult?`última ${fFecha(ult.fecha,{day:"numeric",month:"short"})}`:"", p.estado==="alta"?"de alta":""].filter(Boolean).join(" · ");
+  const sub = [c.multi?`ronda ${c.actual.n}`:"", `${c.realizadas.length} ${c.realizadas.length===1?"sesión":"sesiones"}`, ult?`última ${fFecha(ult.fecha,{day:"numeric",month:"short"})}`:"", p.estado==="alta"?"de alta":""].filter(Boolean).join(" · ");
   return `<button class="item" data-act="open-pac" data-id="${p.id}" ${p.estado==="alta"?'style="opacity:.7"':""}>
     <span class="avatar">${h(iniciales(p.nombre))}</span>
     <span class="body"><span class="t">${h(p.nombre)}</span><span class="s">${h(p.dxMedico||p.eval?.dxFt||"Sin diagnóstico")} · ${sub}</span></span>
@@ -700,7 +745,7 @@ function vCobros(){
       <span class="avatar">${h(iniciales(p.nombre))}</span>
       <button class="body" data-act="open-pac" data-id="${p.id}" style="background:none;border:0;padding:0;text-align:left;cursor:pointer">
         <span class="t" style="display:block">${h(p.nombre)}</span>
-        <span class="s" style="display:block">${c.pendientes.length} ${c.pendientes.length===1?"sesión":"sesiones"} · ${c.pendientes.map(s=>"S"+c.num.get(s.id)).join(", ")}</span></button>
+        <span class="s" style="display:block">${c.pendientes.length} ${c.pendientes.length===1?"sesión":"sesiones"} · ${c.pendientes.map(s=>c.lab.get(s.id)).join(", ")}</span></button>
       <span class="num" style="font-weight:600;color:var(--warn)">${money(c.debe)}</span>
       <button class="btn small" data-act="new-pag" data-pid="${p.id}">Cobrar</button>
     </div>`).join("")}</div>` : `<div class="empty"><p>Todos tus pacientes están al día.</p></div>`;
@@ -710,7 +755,7 @@ function vCobros(){
 }
 function pagoRow(pg){
   const p = pacById(pg.pid); const c = cuenta(pg.pid);
-  const cubre = c.ses.filter(s=>c.cov.get(s.id).pagos.includes(pg.id)).map(s=>"S"+c.num.get(s.id));
+  const cubre = c.ses.filter(s=>c.cov.get(s.id).pagos.includes(pg.id)).map(s=>c.lab.get(s.id));
   return `<button class="item" data-act="edit-pag" data-id="${pg.id}">
     <span class="body"><span class="t">${S.view==="cobros"&&!S.pid?h(p.nombre):fFecha(pg.fecha,{day:"numeric",month:"long",year:"numeric"})}</span>
     <span class="s">${S.view==="cobros"&&!S.pid?fFecha(pg.fecha)+" · ":""}${h(pg.metodo||"")}${cubre.length?" · cubre "+cubre.join(", "):" · a cuenta"}${pg.nota?" · "+h(pg.nota):""}</span></span>
@@ -729,9 +774,12 @@ function chartEva(c){
   const path=a=>a.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
   const area = ld.length>1 ? path(ld)+` L${ld[ld.length-1][0].toFixed(1)} ${y(0)} L${ld[0][0].toFixed(1)} ${y(0)} Z` : "";
   let g=""; for(const v of [0,5,10]) g+=`<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-6}" y="${y(v)+3.5}" text-anchor="end">${v}</text>`;
-  const labs = pts.map((s,i)=>`<text class="ax" x="${x(i)}" y="${H-6}" text-anchor="middle">S${c.num.get(s.id)}</text>`).join("");
+  const paso = Math.ceil(pts.length/14);
+  const labs = pts.map((s,i)=> i%paso && i!==pts.length-1 ? "" : `<text class="ax" x="${x(i)}" y="${H-6}" text-anchor="middle">${c.numR.get(s.id)}</text>`).join("");
+  if(c.multi) pts.forEach((s,i)=>{ if(i===0 || rondaN(s)!==rondaN(pts[i-1])){ const xs = i? (x(i)+x(i-1))/2 : x(0);
+    if(i) g+=`<line class="sep" x1="${xs}" x2="${xs}" y1="${T}" y2="${y(0)}"/>`; g+=`<text class="ax rl" x="${i?xs+3:xs}" y="${T+8}">R${rondaN(s)}</text>`; } });
   const first = pts[0].evaAntes ?? pts[0].evaDespues, last = pts[pts.length-1].evaDespues ?? pts[pts.length-1].evaAntes;
-  return `<div class="chart"><div class="sec-h" style="margin-bottom:6px"><span class="eyebrow">Dolor (EVA 0–10)</span><span class="num" style="font-size:13px">${first} → ${last}</span></div>
+  return `<div class="chart"><div class="sec-h" style="margin-bottom:6px"><span class="eyebrow">Dolor (EVA 0–10)${c.multi?" · por ronda":""}</span><span class="num" style="font-size:13px">${first} → ${last}</span></div>
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Evolución del dolor por sesión">${g}
       ${area?`<path class="area" d="${area}"/>`:""}
       ${la.length>1?`<path class="l-a" d="${path(la)}"/>`:""}${ld.length>1?`<path class="l-d" d="${path(ld)}"/>`:""}
@@ -740,7 +788,7 @@ function chartEva(c){
 }
 
 function sesCard(s,c){
-  const n=c.num.get(s.id);
+  const n=c.numR.get(s.id);
   const tx=(s.tratamientos||[]);
   return `<button class="ses" data-act="edit-ses" data-id="${s.id}">
     <div class="ses-h">${n?`<span class="ses-n">S${n}</span>`:""}<span class="ses-d">${fFecha(s.fecha,{weekday:"short",day:"numeric",month:"short"})}${s.hora?" · "+h(s.hora):""}</span>
@@ -753,11 +801,77 @@ function sesCard(s,c){
   </button>`;
 }
 
+function rondaCard(p, c){
+  const r = c.actual, hecho = r.realizadas.length, sig = Math.max(...c.rondas.map(x=>x.n))+1;
+  const pct = r.plan ? Math.min(100, Math.round(hecho*100/r.plan)) : 0;
+  const completa = !r.cerrada && r.plan && hecho >= r.plan;
+  const ev = evoDe(r.realizadas);
+  const det = [rangoRonda(r), ev?`dolor ${ev}`:"", r.programadas.length?`${r.programadas.length} ${r.programadas.length===1?"programada":"programadas"}`:"", r.noAsistio.length?`${r.noAsistio.length} ${r.noAsistio.length===1?"inasistencia":"inasistencias"}`:""].filter(Boolean).join(" · ");
+  return `<section class="ronda ${completa?"done":""}">
+    <div class="sec-h"><span class="eyebrow">Ronda ${r.n} · ${r.cerrada?"cerrada":"en curso"}</span><button class="btn ghost small" data-act="edit-ronda" data-pid="${p.id}" data-n="${r.n}">Editar</button></div>
+    <div class="big"><span class="num">${hecho}</span> <span class="muted" style="font-size:14px;font-family:var(--f-body);font-weight:500">${r.plan?`de ${r.plan} sesiones`:hecho===1?"sesión realizada":"sesiones realizadas"}</span></div>
+    ${r.plan?`<div class="bar" role="progressbar" aria-label="Avance de la ronda" aria-valuenow="${hecho}" aria-valuemin="0" aria-valuemax="${r.plan}"><i style="width:${pct}%"></i></div>`:""}
+    ${det?`<div class="hint">${h(det)}</div>`:""}
+    ${r.objetivo?`<p><b>Objetivo:</b> ${h(r.objetivo)}</p>`:""}
+    ${r.cerrada&&r.nota?`<p><b>Cierre:</b> ${h(r.nota)}</p>`:""}
+    ${completa?`<p class="hint" style="color:var(--accent);font-weight:600">Completó las ${r.plan} sesiones de esta ronda. Puedes cerrarla e iniciar la ronda ${sig}.</p>`:""}
+    <div class="row">${r.cerrada?"":`<button class="btn small" data-act="cerrar-ronda" data-pid="${p.id}" data-n="${r.n}">Cerrar ronda</button>`}
+      <button class="btn small ${r.cerrada||completa?"primary":""}" data-act="new-ronda" data-pid="${p.id}">Iniciar ronda ${sig}</button></div>
+  </section>`;
+}
+
+function formRonda(pid, n, opts={}){
+  const p = pacById(pid); if(!p) return; const c = cuenta(pid);
+  const sig = Math.max(...c.rondas.map(x=>x.n))+1;
+  if(n==null){
+    const ab = c.rondas.filter(r=>!r.cerrada).slice(-1)[0], prev = c.rondas[c.rondas.length-1];
+    const pend = ab ? ab.programadas.filter(s=>s.fecha>=today()) : [];
+    const ev = ab ? evoDe(ab.realizadas) : "";
+    const body = `
+      ${ab?`<div class="f"><span>Cierre de la ronda ${ab.n}</span><p class="hint" style="margin:0">${ab.realizadas.length}${ab.plan?" de "+ab.plan:""} sesiones realizadas${ev?` · dolor ${ev}`:""}. Se cierra hoy.</p></div>
+      ${field(`Resultado de la ronda ${ab.n}`, `<textarea id="r_cierre" name="notaCierre" placeholder="Ej. EVA 7 → 3, recuperó la flexión. Se indica segunda ronda de fortalecimiento.">${h(ab.nota)}</textarea>`)}
+      <div class="group-h">Ronda ${sig}</div>`:""}
+      <div class="grid2">${field("Inicio", `<input id="r_ini" name="inicio" type="date" value="${today()}">`)}${field("Sesiones previstas", `<input id="r_plan" name="plan" type="number" min="0" inputmode="numeric" value="${h(prev?.plan)}">`)}</div>
+      ${field("Objetivos de esta ronda", `<textarea id="r_obj" name="objetivo" placeholder="Ej. Fortalecimiento y retorno al deporte"></textarea>`)}
+      ${pend.length?`<label class="check"><input type="checkbox" name="mover" checked><span class="body"><b>Pasar ${pend.length===1?"la sesión programada":`las ${pend.length} sesiones programadas`} a la ronda ${sig}</b><div class="hint">${pend.map(s=>fFecha(s.fecha)).join(" · ")}</div></span></label>`:""}`;
+    openSheet(`Iniciar ronda ${sig}`, body, {submitLabel:`Iniciar ronda ${sig}`, onSubmit: async f=>{
+      const plan = val(f,"plan")===""?null:Number(val(f,"plan"));
+      const nn = await nuevaRonda(p, {inicio:val(f,"inicio")||today(), plan, objetivo:val(f,"objetivo"), notaCierre:f.elements.notaCierre?val(f,"notaCierre"):""});
+      if(f.elements.mover?.checked) for(const s of pend) await save("ses", {...s, ronda:nn});
+      S.pid=pid; S.tab="sesiones"; toast(`Ronda ${nn} iniciada. Programa sus sesiones.`); render();
+    }, onMount:f=>{ const t=f.elements.notaCierre; if(t) setTimeout(()=>t.focus(),50); }});
+    return;
+  }
+  const r = c.rondas.find(x=>x.n===Number(n)); if(!r) return;
+  const cerrada = opts.cerrar || !!r.cerrada;
+  const ev = evoDe(r.realizadas);
+  const body = `
+    <p class="hint" style="margin:0">${r.realizadas.length}${r.plan?" de "+r.plan:""} sesiones realizadas${ev?` · dolor ${ev}`:""}${r.programadas.length?` · ${r.programadas.length} programadas`:""}</p>
+    <div class="grid2">${field("Inicio", `<input id="r_ini" name="inicio" type="date" value="${h(r.inicio)}">`)}${field("Sesiones previstas", `<input id="r_plan" name="plan" type="number" min="0" inputmode="numeric" value="${h(r.plan)}">`)}</div>
+    ${field("Objetivos de esta ronda", `<textarea id="r_obj" name="objetivo">${h(r.objetivo)}</textarea>`)}
+    <div class="f"><span>Estado</span><div class="seg" role="radiogroup"><label><input type="radio" name="estado" value="abierta" ${cerrada?"":"checked"}><span>En curso</span></label><label><input type="radio" name="estado" value="cerrada" ${cerrada?"checked":""}><span>Cerrada</span></label></div></div>
+    <div id="cierreBox" class="sec" style="gap:14px">
+      ${field("Fecha de cierre", `<input id="r_fin" name="cerrada" type="date" value="${h(r.cerrada||today())}">`)}
+      ${field("Resultado / reevaluación", `<textarea id="r_nota" name="nota" placeholder="Cómo terminó la ronda y qué se indica después">${h(r.nota)}</textarea>`)}
+    </div>`;
+  const extra = !r.todas.length && c.rondas.length>1 ? `<button type="button" class="btn danger small" data-act="del-ronda" data-pid="${pid}" data-n="${r.n}">Borrar ronda</button>` : "";
+  openSheet(opts.cerrar?`Cerrar ronda ${r.n}`:`Ronda ${r.n}`, body, {extra, submitLabel:opts.cerrar?"Cerrar ronda":"Guardar", onSubmit: async f=>{
+    const cerr = radio(f,"estado")==="cerrada";
+    const rs = c.rondas.map(x=> x.n!==r.n ? x : {...x, inicio:val(f,"inicio"), plan:val(f,"plan")===""?null:Number(val(f,"plan")), objetivo:val(f,"objetivo"),
+      cerrada: cerr ? (val(f,"cerrada")||today()) : "", nota: cerr ? val(f,"nota") : x.nota});
+    await guardarRondas(p, rs);
+    toast(cerr && !r.cerrada ? `Ronda ${r.n} cerrada` : "Ronda guardada"); render();
+  }, onMount:f=>{
+    const sync=()=>{ f.querySelector("#cierreBox").hidden = radio(f,"estado")!=="cerrada"; };
+    f.addEventListener("change", sync); sync(); if(opts.cerrar) setTimeout(()=>f.elements.nota.focus(),50);
+  }});
+}
+
 const EVAL_FIELDS = [["fecha","Fecha de evaluación"],["motivo","Motivo de consulta"],["inicio","Inicio y mecanismo"],["antecedentes","Antecedentes"],["medicacion","Medicación"],["eva","Dolor inicial (EVA)"],["localizacion","Localización del dolor"],["examen","Examen físico"],["dxFt","Diagnóstico fisioterapéutico"],["objetivos","Objetivos"],["sesionesPlan","Sesiones previstas"],["frecuencia","Frecuencia"]];
 
 function vFicha(p){
   const c = cuenta(p.id); const e = p.eval; const ed = edad(p.nac);
-  const plan = e?.sesionesPlan ? `de ${e.sesionesPlan}` : "realizadas";
+  const ra = c.actual; const plan = ra.plan ? `de ${ra.plan}` : "realizadas";
   let html = `<section class="hero">
     <div class="hero-top"><button class="icon-btn" data-act="back" aria-label="Volver"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div style="flex:1;min-width:0"><h2>${h(p.nombre)}</h2>
@@ -765,7 +879,7 @@ function vFicha(p){
       ${p.anam?.banderas?.length?`<button class="pill bad" data-tab="anamnesis" style="cursor:pointer;margin-top:4px">⚠ ${p.anam.banderas.length===1?"1 bandera roja":p.anam.banderas.length+" banderas rojas"}</button>`:""}
       ${p.tel?`<div class="meta tel"><span class="num">${h(p.tel)}</span><button class="btn ghost small" data-act="copy" data-text="${h(p.tel)}">Copiar</button></div>`:""}</div></div>
     <div class="summary">
-      <div class="stat"><span class="eyebrow">Sesiones</span><b class="num">${c.realizadas.length} <span class="muted" style="font-size:13px;font-family:var(--f-body)">${plan}</span></b></div>
+      <div class="stat"><span class="eyebrow">${c.multi?`Ronda ${ra.n}`:"Sesiones"}</span><b class="num">${ra.realizadas.length} <span class="muted" style="font-size:13px;font-family:var(--f-body)">${plan}</span></b></div>
       <div class="stat ${c.debe>0.004?"alert":""}"><span class="eyebrow">${c.debe>0.004?"Debe":c.aFavor>0.004?"A favor":"Saldo"}</span><b class="num">${money(c.debe>0.004?c.debe:c.aFavor)}</b></div>
       <div class="stat"><span class="eyebrow">Próxima</span><b style="font-size:15px">${c.programadas[0]?fFecha(c.programadas[0].fecha,{weekday:"short",day:"numeric"})+" "+h(c.programadas[0].hora||""):"—"}</b></div>
     </div>
@@ -774,9 +888,18 @@ function vFicha(p){
   <div class="tabs" role="tablist">${[["sesiones","Sesiones"],["anamnesis","Anamnesis"],["evaluacion","Evaluación"],["pagos","Pagos"],["datos","Datos"]].map(([k,l])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${l}</button>`).join("")}</div>`;
 
   if(S.tab==="sesiones"){
+    if(c.todas.length || p.rondas?.length) html += rondaCard(p, c);
     html += chartEva(c);
-    const list = [...c.todas].sort(cmpSes).reverse();
-    html += list.length ? `<div class="sec">${list.map(s=>sesCard(s,c)).join("")}</div>` : `<div class="empty"><p>Aún no hay sesiones. Programa la primera.</p><button class="btn primary" data-act="new-ses" data-pid="${p.id}">Programar sesión</button></div>`;
+    if(!c.todas.length) html += `<div class="empty"><p>Aún no hay sesiones${c.multi?" en esta ronda":""}. Programa la primera.</p><button class="btn primary" data-act="new-ses" data-pid="${p.id}">Programar sesión</button></div>`;
+    else if(!c.multi) html += `<div class="sec">${[...c.todas].sort(cmpSes).reverse().map(s=>sesCard(s,c)).join("")}</div>`;
+    else for(const r of [...c.rondas].reverse()){
+      const list = [...r.todas].sort(cmpSes).reverse();
+      html += `<div class="sec"><button class="ronda-h" data-act="edit-ronda" data-pid="${p.id}" data-n="${r.n}"><span class="ses-n">R${r.n}</span><b>Ronda ${r.n}</b>
+        <span class="muted">${r.realizadas.length}${r.plan?" de "+r.plan:""} ${r.realizadas.length===1&&!r.plan?"sesión":"sesiones"}${rangoRonda(r)?" · "+rangoRonda(r):""}</span><span style="flex:1"></span>
+        ${r.cerrada?`<span class="pill">Cerrada</span>`:`<span class="pill acc">En curso</span>`}</button>
+        ${r.cerrada&&r.nota?`<p class="hint" style="margin:0 2px">Cierre: ${h(r.nota)}</p>`:""}
+        ${list.length?list.map(s=>sesCard(s,c)).join(""):`<p class="hint" style="margin:0 2px">Sin sesiones en esta ronda.</p>`}</div>`;
+    }
   } else if(S.tab==="anamnesis"){
     html += vAnamnesis(p);
   } else if(S.tab==="evaluacion"){
@@ -789,7 +912,7 @@ function vFicha(p){
     html += `<div class="dl">
       <div><dt>Total facturado (sesiones realizadas)</dt><dd class="num">${money(c.realizadas.reduce((a,s)=>a+precioDe(s),0))}</dd></div>
       <div><dt>Total pagado</dt><dd class="num">${money(c.pagado)}</dd></div>
-      ${c.debe>0.004?`<div><dt>Pendiente</dt><dd class="num" style="color:var(--warn);font-weight:600">${money(c.debe)} · ${c.pendientes.map(s=>"S"+c.num.get(s.id)).join(", ")}</dd></div>`:""}
+      ${c.debe>0.004?`<div><dt>Pendiente</dt><dd class="num" style="color:var(--warn);font-weight:600">${money(c.debe)} · ${c.pendientes.map(s=>c.lab.get(s.id)).join(", ")}</dd></div>`:""}
       ${c.aFavor>0.004?`<div><dt>Saldo a favor</dt><dd class="num" style="color:var(--accent);font-weight:600">${money(c.aFavor)}${c.prepagadas?` · cubre ${c.prepagadas} ${c.prepagadas===1?"sesión programada":"sesiones programadas"}`:""}</dd></div>`:""}
     </div>`;
     const pl = [...c.pagos].reverse();
@@ -968,13 +1091,14 @@ function informe(pid){
   if(e.fecha) L.push(`Evaluación inicial: ${fFecha(e.fecha,{day:"numeric",month:"long",year:"numeric"})}${e.eva!=null&&e.eva!==""?` · EVA ${e.eva}/10`:""}`);
   if(e.motivo) L.push(`Motivo de consulta: ${e.motivo}`);
   if(e.objetivos) L.push(`Objetivos: ${e.objetivos}`);
-  L.push("", `Sesiones realizadas: ${c.realizadas.length}${e.sesionesPlan?" de "+e.sesionesPlan+" previstas":""}`);
+  L.push("", `Sesiones realizadas: ${c.realizadas.length}${!c.multi&&c.actual.plan?" de "+c.actual.plan+" previstas":""}${c.multi?` en ${c.rondas.length} rondas`:""}`);
+  if(c.multi) c.rondas.forEach(r=>{ const ev=evoDe(r.realizadas); L.push(`Ronda ${r.n}${rangoRonda(r)?` (${rangoRonda(r)})`:""}: ${r.realizadas.length}${r.plan?" de "+r.plan:""} sesiones${ev?` · EVA ${ev}`:""}${r.cerrada?"":" · en curso"}${r.objetivo?` · Objetivo: ${r.objetivo}`:""}${r.nota?` · Cierre: ${r.nota}`:""}`); });
   const ev = c.realizadas.filter(s=>s.evaAntes!=null||s.evaDespues!=null);
   if(ev.length){ const f=ev[0].evaAntes??ev[0].evaDespues, l=ev[ev.length-1].evaDespues??ev[ev.length-1].evaAntes; L.push(`Evolución del dolor (EVA): ${f} → ${l}`); }
   const tx=new Map(); c.realizadas.forEach(s=>(s.tratamientos||[]).forEach(t=>tx.set(t,(tx.get(t)||0)+1)));
   if(tx.size) L.push(`Tratamientos aplicados: ${[...tx].sort((a,b)=>b[1]-a[1]).map(([t,n])=>`${t} (${n})`).join(", ")}`);
   L.push("", "Detalle por sesión:");
-  c.realizadas.forEach(s=> L.push(`S${c.num.get(s.id)} · ${fFecha(s.fecha,{day:"numeric",month:"short",year:"numeric"})}${s.evaAntes!=null||s.evaDespues!=null?` · EVA ${s.evaAntes??"–"}→${s.evaDespues??"–"}`:""}${s.nota?` · ${s.nota}`:""}`));
+  c.realizadas.forEach(s=> L.push(`${c.lab.get(s.id)} · ${fFecha(s.fecha,{day:"numeric",month:"short",year:"numeric"})}${s.evaAntes!=null||s.evaDespues!=null?` · EVA ${s.evaAntes??"–"}→${s.evaDespues??"–"}`:""}${s.nota?` · ${s.nota}`:""}`));
   return L.join("\n");
 }
 async function copiar(text){
@@ -1044,7 +1168,8 @@ function formEval(pid){
     ${field("Frecuencia", `<input id="e_frec" name="frecuencia" value="${h(e.frecuencia)}" placeholder="2 veces por semana">`)}</div>`;
   openSheet("Evaluación inicial", body, {onSubmit: async f=>{
     const ev={}; for(const [k] of EVAL_FIELDS){ if(k==="eva") ev.eva = radio(f,"eva")===""?null:Number(radio(f,"eva")); else if(k==="sesionesPlan") ev.sesionesPlan = val(f,k)===""?null:Number(val(f,k)); else ev[k]=val(f,k); }
-    await save("pac", {...p, eval:ev}); S.tab="evaluacion"; toast("Evaluación guardada"); render();
+    const rondas = Array.isArray(p.rondas)&&p.rondas.length ? p.rondas.map(r=>r.n===1?{...r, plan:ev.sesionesPlan}:r) : p.rondas;
+    await save("pac", {...p, eval:ev, ...(rondas?{rondas}:{})}); S.tab="evaluacion"; toast("Evaluación guardada"); render();
   }, onMount:f=>{ paintEva(f); f.addEventListener("change", ()=>paintEva(f)); }});
 }
 
@@ -1066,6 +1191,7 @@ function formSesion(s, pidHint, opts={}){
   const pagada = !isNew && c && c.est.get(s.id)==="pagada";
   const body = `
     ${field("Paciente", `<select id="s_pid" name="pid" ${!isNew?"disabled":""}><option value="">Elige un paciente…</option>${activos.map(p=>`<option value="${p.id}" ${p.id===s.pid?"selected":""}>${h(p.nombre)}</option>`).join("")}</select>`)}
+    <div id="rondaBox" class="f" hidden><span>Ronda</span><select id="s_ronda" name="ronda"></select></div>
     <div class="grid2">${field("Fecha", `<input id="s_fecha" name="fecha" type="date" value="${h(s.fecha)}">`)}${field("Hora", `<input id="s_hora" name="hora" type="time" value="${h(s.hora)}">`)}</div>
     <div class="f"><span>Estado</span><div class="seg" role="radiogroup">${Object.entries(ESTADOS).map(([k,l])=>`<label><input type="radio" name="estado" value="${k}" ${s.estado===k?"checked":""}><span>${l}</span></label>`).join("")}</div></div>
     <div id="repBox" class="f" ${isNew?"":"hidden"}><span>Repetir cada semana</span><select id="s_rep" name="rep"><option value="0">Solo esta sesión</option>${[1,2,3,4,5,6,7,8,9,11].map(n=>`<option value="${n}">${n+1} sesiones (esta y ${n} más)</option>`).join("")}</select></div>
@@ -1090,17 +1216,29 @@ function formSesion(s, pidHint, opts={}){
     const estado = radio(f,"estado")||"programada";
     const tx=[...f.querySelectorAll('input[name="tx"]:checked')].map(i=>i.value); const otro=val(f,"txOtro"); if(otro && !tx.includes(otro)) tx.push(otro);
     const ea=radio(f,"evaAntes"), ed=radio(f,"evaDespues");
-    const obj = {...s, pid, fecha, hora:val(f,"hora"), estado, tratamientos:tx, nota:val(f,"nota"), casa:val(f,"casa"),
+    const cp = cuenta(pid), rv = val(f,"ronda");
+    const ronda = rv==="nueva" ? await nuevaRonda(pacById(pid), {inicio:fecha, plan:cp.rondas[cp.rondas.length-1]?.plan ?? null}) : (Number(rv) || (isNew ? cp.actual.n : rondaN(s)));
+    const obj = {...s, pid, ronda, fecha, hora:val(f,"hora"), estado, tratamientos:tx, nota:val(f,"nota"), casa:val(f,"casa"),
       evaAntes: ea===""?null:Number(ea), evaDespues: ed===""?null:Number(ed), precio: val(f,"precio")===""?0:Number(val(f,"precio"))};
     const id = await save("ses", obj);
     const rep = isNew && estado==="programada" ? Number(val(f,"rep")||0) : 0;
-    for(let i=1;i<=rep;i++) await save("ses", {pid, fecha:addDays(fecha,7*i), hora:obj.hora, estado:"programada", tratamientos:[], nota:"", casa:"", evaAntes:null, evaDespues:null, precio:obj.precio});
+    for(let i=1;i<=rep;i++) await save("ses", {pid, ronda, fecha:addDays(fecha,7*i), hora:obj.hora, estado:"programada", tratamientos:[], nota:"", casa:"", evaAntes:null, evaDespues:null, precio:obj.precio});
     if(f.elements.cobrar?.checked && obj.precio>0) await save("pag", {pid, fecha:today(), monto:obj.precio, metodo:val(f,"metodo"), sesionIds:[id], nota:""});
     toast(rep?`${rep+1} sesiones programadas`: f.elements.cobrar?.checked ? "Sesión y pago guardados" : "Sesión guardada");
     render();
   }, onMount: f=>{
+    const llenarRonda=()=>{
+      const box=f.querySelector("#rondaBox"), sel=f.elements.ronda, pid=isNew?f.elements.pid.value:s.pid;
+      if(!pid || !pacById(pid)){ box.hidden=true; sel.innerHTML=""; return; }
+      const cp=cuenta(pid), ab=cp.rondas.filter(r=>!r.cerrada).slice(-1)[0], sig=Math.max(...cp.rondas.map(r=>r.n))+1;
+      const elegida = isNew ? (ab ? String(ab.n) : "nueva") : String(rondaN(s));
+      sel.innerHTML = cp.rondas.map(r=>`<option value="${r.n}">Ronda ${r.n}${r.cerrada?" (cerrada)":" (en curso)"}</option>`).join("") + `<option value="nueva">Iniciar ronda ${sig}${ab?` (cierra la ronda ${ab.n})`:""}</option>`;
+      sel.value = elegida; box.hidden = !(cp.multi || !ab);
+    };
+    llenarRonda();
     const sync=()=>{ const e=radio(f,"estado"); f.querySelector("#realBox").hidden = e!=="realizada"; f.querySelector("#repBox").hidden = !(isNew && e==="programada"); const mb=f.querySelector("#metBox"); if(mb) mb.hidden=!f.elements.cobrar.checked; paintEva(f); };
     f.addEventListener("change", ev=>{
+      if(ev.target.name==="pid" && isNew) llenarRonda();
       if(ev.target.name==="pid" && isNew){ const p=pacById(ev.target.value); if(p && p.tarifa!=="" && p.tarifa!=null) f.elements.precio.value=p.tarifa; }
       sync();
     });
@@ -1120,7 +1258,7 @@ function formPago(pg, pid){
     ${field("Método", `<select id="p_met" name="metodo">${METODOS.map(m=>`<option ${m===pg.metodo?"selected":""}>${m}</option>`).join("")}</select>`)}
     <div class="f"><span>¿Qué sesiones paga?</span>
       ${elegibles.length?`<div class="checks">${elegibles.map(s=>`<label class="check"><input type="checkbox" name="ses" value="${s.id}" data-r="${isNew?restante(s):precioDe(s)}" ${(pg.sesionIds||[]).includes(s.id)?"checked":""}>
-        <span class="body"><b>S${c.num.get(s.id)}</b> · ${fFecha(s.fecha)}${s.estado==="programada"?" · programada":""}<div class="hint">${money(isNew?restante(s):precioDe(s))}</div></span></label>`).join("")}</div>`:`<p class="hint" style="margin:0">No hay sesiones pendientes.</p>`}
+        <span class="body"><b>${c.lab.get(s.id)}</b> · ${fFecha(s.fecha)}${s.estado==="programada"?" · programada":""}<div class="hint">${money(isNew?restante(s):precioDe(s))}</div></span></label>`).join("")}</div>`:`<p class="hint" style="margin:0">No hay sesiones pendientes.</p>`}
       <p class="hint" style="margin:0">Si paga un paquete o un adelanto, deja las casillas vacías: el monto queda a favor y cubre las siguientes sesiones en orden.</p></div>
     ${field("Nota", `<input id="p_nota" name="nota" value="${h(pg.nota)}" placeholder="Ej. Paquete de 10 sesiones">`)}`;
   const extra = isNew ? "" : `<button type="button" class="btn danger small" data-act="del-pag" data-id="${pg.id}">Borrar</button>`;
@@ -1164,6 +1302,10 @@ document.addEventListener("click", async ev=>{
     case "ver-cal": S.filtro=pid; S.view="agenda"; S.pid=null; S.dia=today(); S.mes=S.dia.slice(0,7); render(); window.scrollTo(0,0); break;
     case "edit-ses": { const s=S.ses.find(x=>x.id===id); if(s) formSesion(s, null, {realizar: s.estado==="programada" && s.fecha<=today()}); break; }
     case "new-pag": formPago(null, pid); break;
+    case "new-ronda": formRonda(pid, null); break;
+    case "edit-ronda": formRonda(pid, b.dataset.n); break;
+    case "cerrar-ronda": formRonda(pid, b.dataset.n, {cerrar:true}); break;
+    case "del-ronda": if(confirmBtn(b,"¿Borrar? Toca otra vez")){ const p=pacById(pid), c=cuenta(pid); await guardarRondas(p, c.rondas.filter(r=>r.n!==Number(b.dataset.n))); closeSheet(); toast("Ronda borrada"); render(); } break;
     case "edit-pag": { const pg=S.pag.find(x=>x.id===id); if(pg) formPago(pg); break; }
     case "informe": copiar(informe(pid)); break;
     case "ajustes": formAjustes(); break;
